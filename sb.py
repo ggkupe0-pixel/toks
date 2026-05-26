@@ -39,33 +39,42 @@ class SafePermanentAnchor(discord.Client):
         if self.is_reconnecting or not self.target_vc_id:
             return
 
+        # Check if we are already comfortably connected to the target channel
+        if self.voice_clients:
+            for vc in self.voice_clients:
+                if vc.channel.id == self.target_vc_id and vc.is_connected():
+                    return  # Do absolutely nothing if already inside
+
         self.is_reconnecting = True
         try:
             channel = await self.fetch_channel(self.target_vc_id)
 
+            # Clean up lingering or stuck voice states strictly
             if self.voice_clients:
                 for vc in self.voice_clients:
-                    if vc.channel.id == self.target_vc_id:
-                        print(f"[{self.user}] Already in target channel.")
-                        self.is_reconnecting = False
-                        return
-                    await vc.disconnect()
+                    try:
+                        await vc.disconnect(force=True)
+                    except Exception:
+                        pass
+                await asyncio.sleep(1)
 
             print(f"[{self.user}] Joining {channel.name}...")
             await channel.connect(self_deaf=False, self_mute=True, reconnect=True)
             print(f"[{self.user}] SESSION LOCKED")
         except Exception as e:
             print(f"[{self.user}] Join failed: {e}")
-            await asyncio.sleep(30) 
+            await asyncio.sleep(20) 
         finally:
             self.is_reconnecting = False
 
     async def on_voice_state_update(self, member, before, after):
-        if member.id == self.user.id and after.channel is None:
-            if not self.is_reconnecting:
-                print(f"[{self.user}] Disconnected. Reconnecting in 10s...")
-                await asyncio.sleep(10) 
-                await self.join_vc()
+        # Only trigger reconnection logic if it is strictly THIS specific account being disconnected
+        if member.id == self.user.id:
+            if after.channel is None or after.channel.id != self.target_vc_id:
+                if not self.is_reconnecting:
+                    print(f"[{self.user}] Left target channel. Reconnecting in 5s...")
+                    await asyncio.sleep(5) 
+                    await self.join_vc()
 
 async def start_bots():
     if not TARGET_VC_ID or not TOKENS:
@@ -74,7 +83,7 @@ async def start_bots():
 
     print(f"Launching {len(TOKENS)} account(s)...")
 
-    # Connect sequentially with a short delay to keep the gateway stable
+    # Connect sequentially with a 3-second gap so they don't break each other's gateway connections
     for token in TOKENS:
         try:
             client = SafePermanentAnchor(
@@ -82,7 +91,7 @@ async def start_bots():
                 heartbeat_timeout=60.0
             )
             asyncio.create_task(client.start(token))
-            await asyncio.sleep(2.0)  
+            await asyncio.sleep(3.0)  
         except Exception as e:
             print(f"Initialization failed for token: {e}")
 
@@ -97,7 +106,6 @@ if __name__ == "__main__":
         print("Process stopped.")
     except Exception as e:
         print(f"FATAL ERROR: {e}")
-
 
 
 

@@ -15,9 +15,9 @@ install_requirements()
 
 TARGET_VC_ID = os.getenv('VC_ID') 
 
-# Dynamically read USER_TOKEN_1 through USER_TOKEN_8 from Railway
+# Dynamically read USER_TOKEN_1 through USER_TOKEN_8 from Railway variables
 TOKENS = []
-for i in range(1, 9):  # Changes range to 1 through 8
+for i in range(1, 9):
     token = os.getenv(f'USER_TOKEN_{i}')
     if token and token.strip():
         TOKENS.append(token.strip())
@@ -74,15 +74,15 @@ async def start_bots():
 
     print(f"Launching {len(TOKENS)} account(s)...")
 
-    # Sequential startup with a 1.5s delay to prevent rate limits
+    # Sequential startup with a 1.5s delay to prevent gateway rate limits
     for token in TOKENS:
         try:
             client = SafePermanentAnchor(
                 vc_id=TARGET_VC_ID,
                 heartbeat_timeout=60.0
             )
-            # Spawn each client connection as an independent background task
-            asyncio.create_task(client.start(token))
+            # CRITICAL FIX: Explicitly pass bot=False for self-bot authentication
+            asyncio.create_task(client.start(token, bot=False))
             await asyncio.sleep(1.5)  
         except Exception as e:
             print(f"Failed to initialize a token: {e}")
@@ -98,4 +98,5 @@ if __name__ == "__main__":
         print("Process stopped.")
     except Exception as e:
         print(f"FATAL ERROR: {e}")
+
 

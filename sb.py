@@ -22,46 +22,60 @@ for i in range(1, 4):
     if token and token.strip():
         TOKENS.append(token.strip())
 
-# Clean up logging levels so we can track exact network drops if they happen
-logging.basicConfig(level=logging.INFO)
-logging.getLogger('discord').setLevel(logging.WARNING)
+logging.getLogger('discord').setLevel(logging.CRITICAL)
 
 class SafePermanentAnchor(discord.Client):
     def __init__(self, vc_id, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.target_vc_id = int(vc_id) if vc_id else None
-        self.is_connecting = False
+        self.is_reconnecting = False
 
     async def on_ready(self):
         print(f"LOGGED IN: {self.user} (ID: {self.user.id})")
-        # Initialize the background guardian loop
-        self.loop.create_task(self.maintain_connection())
+        await asyncio.sleep(2)
+        await self.join_vc()
 
-    async def maintain_connection(self):
-        await self.wait_until_ready()
-        while not self.is_closed():
-            if self.target_vc_id:
-                await self.ensure_vc()
-            # Send a confirmation heartbeat pulse to Discord every 30 seconds
-            await asyncio.sleep(30)
-
-    async def ensure_vc(self):
-        if self.is_connecting:
+    async def join_vc(self):
+        if self.is_reconnecting or not self.target_vc_id:
             return
 
-        self.is_connecting = True
+        # Double check if we are already securely inside the target channel
+        if self.voice_clients:
+            for vc in self.voice_clients:
+                if vc.channel.id == self.target_vc_id and vc.is_connected():
+                    return  
+
+        self.is_reconnecting = True
         try:
-            # Resolve the channel and the parent guild object
-            channel = self.get_channel(self.target_vc_id) or await self.fetch_channel(self.target_vc_id)
-            guild = channel.guild
-            
-            # STABLE GATEWAY PAYLOAD: Tells the network to lock you in the VC without audio data streams
-            await guild.change_voice_state(channel=channel, self_mute=True, self_deaf=False)
-            print(f"[{self.user}] Permanent anchor pulse sent to: {channel.name}")
+            channel = await self.fetch_channel(self.target_vc_id)
+
+            # Clean out any old, stuck voice state sessions completely
+            if self.voice_clients:
+                for vc in self.voice_clients:
+                    try:
+                        await vc.disconnect(force=True)
+                    except Exception:
+                        pass
+                await asyncio.sleep(1)
+
+            print(f"[{self.user}] Joining {channel.name}...")
+            # connect using native self-bot parameters
+            await channel.connect(self_deaf=False, self_mute=True, reconnect=True)
+            print(f"[{self.user}] SESSION LOCKED")
         except Exception as e:
-            print(f"[{self.user}] Connection anchor anomaly: {e}")
+            print(f"[{self.user}] Join failed: {e}")
+            await asyncio.sleep(20) 
         finally:
-            self.is_connecting = False
+            self.is_reconnecting = False
+
+    async def on_voice_state_update(self, member, before, after):
+        # If this specific account gets disconnected or kicked, immediately reconnect it
+        if member.id == self.user.id:
+            if after.channel is None or after.channel.id != self.target_vc_id:
+                if not self.is_reconnecting:
+                    print(f"[{self.user}] Left or moved from channel. Anchoring back in 5s...")
+                    await asyncio.sleep(5) 
+                    await self.join_vc()
 
 async def start_bots():
     if not TARGET_VC_ID or not TOKENS:
@@ -70,22 +84,19 @@ async def start_bots():
 
     print(f"Launching {len(TOKENS)} account(s)...")
 
-    # Grant maximum gateway permission tracking for user clients
-    intents = discord.Intents.all()
-
+    # Log them in with a 4-second gap so they don't trip over each other's connections
     for token in TOKENS:
         try:
             client = SafePermanentAnchor(
                 vc_id=TARGET_VC_ID,
-                intents=intents,
                 heartbeat_timeout=60.0
             )
             asyncio.create_task(client.start(token))
-            await asyncio.sleep(3.0)  # Safe delay between account logins
+            await asyncio.sleep(4.0)  
         except Exception as e:
             print(f"Initialization failed for token: {e}")
 
-    # Keep background workers spinning permanently
+    # Main master thread loop to keep the process alive indefinitely
     while True:
         await asyncio.sleep(3600)
 
@@ -93,11 +104,9 @@ if __name__ == "__main__":
     try:
         asyncio.run(start_bots())
     except KeyboardInterrupt:
-        print("Process stopped manually.")
+        print("Process stopped.")
     except Exception as e:
-        print(f"FATAL SYSTEM ERROR: {e}")
-
-
+        print(f"FATAL ERROR: {e}")
 
 
 
